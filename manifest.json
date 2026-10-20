@@ -1,0 +1,10 @@
+{
+	"id": "tune-finder",
+	"name": "Tune Finder",
+	"version": "0.1.0",
+	"minAppVersion": "1.4.0",
+	"description": "Identify traditional tunes in audio recordings, one tune or loop section at a time, using the FolkFriend engine and thesession.org.",
+	"author": "Damian Evans",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

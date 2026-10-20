@@ -1,0 +1,14 @@
+node_modules/
+main.js
+engine/target/
+engine/pkg/
+eval/cache/
+eval/out/
+test-vault/
+.DS_Store
+*.log
+*.js.map
+data.json
+harness/audio/
+harness/harness.js
+eval/overrides.local.json

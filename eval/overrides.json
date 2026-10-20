@@ -1,0 +1,13 @@
+{
+	"_comment": "Corrections to labels taken from file names. 'unlabelled' are file name patterns that name a venue, person or band rather than a tune. 'alsoKnownAs' adds names that are the same tune spelled differently. Put patterns for your own recordings in overrides.local.json (not committed); they are added to these.",
+	"unlabelled": [
+		"^School concert \\d",
+		"^Session at ",
+		"^Lesson with ",
+		"^Excerpt"
+	],
+	"alsoKnownAs": {
+		"Mairin's Fancy": ["Maureen's Fancy"],
+		"Cul Aoidhe": ["Cuil Aodha"]
+	}
+}

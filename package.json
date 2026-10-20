@@ -1,0 +1,26 @@
+{
+	"name": "tune-finder",
+	"version": "0.1.0",
+	"description": "Identify Irish and other traditional tunes in audio recordings, using the FolkFriend engine and thesession.org.",
+	"main": "main.js",
+	"type": "module",
+	"scripts": {
+		"engine": "cd engine && wasm-pack build --target web --release --out-dir pkg",
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "node --test tests/*.test.ts",
+		"install-plugin": "node scripts/install-plugin.mjs",
+		"version": "node version-bump.mjs && git add manifest.json versions.json"
+	},
+	"keywords": [],
+	"author": "Damian Evans",
+	"license": "GPL-3.0-only",
+	"devDependencies": {
+		"@types/node": "^24.0.0",
+		"builtin-modules": "3.3.0",
+		"esbuild": "^0.25.0",
+		"obsidian": "latest",
+		"tslib": "^2.8.0",
+		"typescript": "^5.9.0"
+	}
+}
