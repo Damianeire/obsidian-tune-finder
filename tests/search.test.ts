@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CONTOUR_CHARS, confidence, medianPitch, octaveCorrection, searchWithCorrection, transpose } from "../src/search.ts";
+import { CONTOUR_CHARS, confidence, medianPitch, octaveCorrection, searchWithCorrection, transpose, isBetterMatch, matchesNothing } from "../src/search.ts";
 import { VaultTunes } from "../src/vault-match.ts";
 
 const at = (midi: number) => CONTOUR_CHARS[midi - 48];
@@ -24,6 +24,22 @@ test("confidence tiers", () => {
 	assert.equal(confidence([{ score: 0.45 }, { score: 0.4 }]), "possible");
 	assert.equal(confidence([{ score: 0.2 }, { score: 0.1 }]), "unsure");
 	assert.equal(confidence([]), "unsure");
+});
+
+test("a very high score is likely however close the runner-up, and other settings of the top tune are not a runner-up", () => {
+	assert.equal(confidence([{ score: 0.75 }, { score: 0.66 }]), "likely");
+	assert.equal(confidence([{ score: 0.57 }, { score: 0.52 }]), "possible");
+	assert.equal(confidence([{ score: 0.5, tune_id: "1" }, { score: 0.45, tune_id: "1" }, { score: 0.2, tune_id: "2" }]), "likely");
+	assert.equal(confidence([{ score: 0.5, tune_id: "1" }, { score: 0.45, tune_id: "2" }]), "possible");
+});
+
+test("isBetterMatch goes by confidence, then score; matchesNothing is a very low top score", () => {
+	assert.equal(isBetterMatch({ confidence: "possible", top: 0.31 }, { confidence: "unsure", top: 0.29 }), true);
+	assert.equal(isBetterMatch({ confidence: "unsure", top: 0.2 }, { confidence: "unsure", top: 0.25 }), false);
+	assert.equal(isBetterMatch({ confidence: "possible", top: 0.5 }, { confidence: "likely", top: 0.45 }), false);
+	assert.equal(matchesNothing([{ score: 0.19 }]), true);
+	assert.equal(matchesNothing([{ score: 0.28 }]), false);
+	assert.equal(matchesNothing([]), true);
 });
 
 test("searchWithCorrection keeps a strong untransposed result and only tries others when weak", () => {
