@@ -62,3 +62,21 @@ test("VaultTunes finds notes by any name of the tune, and by close spelling only
 	assert.equal(tunes.find(["nora chriona"])?.basename, "Nora Crionna");
 	assert.equal(tunes.find(["the kesh"]), null);
 });
+
+test("VaultTunes goes by the note's session link before its name", () => {
+	const tunes = new VaultTunes([
+		{ basename: "Killavil Reel", aliases: [], sessionTune: "1723" },
+		{ basename: "Kilavil Jig", aliases: [], sessionTune: "667" },
+		{ basename: "Charlie Lennon's", aliases: [], sessionTune: "2115" },
+		{ basename: "The Kesh", aliases: [] },
+	]);
+	// "The Killavil" is a jig; "reel" and "jig" are ignored in names, so only the link tells them apart.
+	assert.equal(tunes.find(["killavil, the"], "667")?.basename, "Kilavil Jig");
+	assert.equal(tunes.find(["killavil, the"], "1723")?.basename, "Killavil Reel");
+	// Another tune that shares a name with a linked note doesn't get that note.
+	assert.equal(tunes.find(["sweeney's buttermilk", "charlie lennon's"], "556"), null);
+	assert.equal(tunes.find(["charlie lennon's"], "2115")?.basename, "Charlie Lennon's");
+	// Notes with no link are matched by name as before, and so is a search with no tune id.
+	assert.equal(tunes.find(["kesh, the"], "55")?.basename, "The Kesh");
+	assert.equal(tunes.find(["charlie lennon's"])?.basename, "Charlie Lennon's");
+});

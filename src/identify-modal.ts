@@ -35,7 +35,10 @@ interface Row {
 	bodyEl: HTMLElement;
 	badgeEl: HTMLElement;
 	hintEl: HTMLElement;
+	joinEl: HTMLElement;
 	playEl: HTMLElement;
+	/** Join this section to the one before; null until that has been offered. */
+	join: boolean | null;
 }
 
 export interface IdentifyModalOptions {
@@ -49,7 +52,7 @@ export interface IdentifyModalOptions {
 	 * Writes the picks (and new loops blocks for scanned recordings) and
 	 * returns a message for a notice. Without it there is only Copy.
 	 */
-	onInsert?: (choices: Choice[], detected: Map<string, DetectedSections>) => Promise<string>;
+	onInsert?: (choices: Choice[], detected: Map<string, DetectedSections>, joins: Map<string, number[]>) => Promise<string>;
 }
 
 const BADGE: Record<string, string> = { likely: "Likely", possible: "Possible", unsure: "Unsure" };
@@ -271,8 +274,9 @@ export class IdentifyModal extends Modal {
 		}
 		const badgeEl = head.createDiv({ cls: "tf-badge" });
 		const hintEl = el.createDiv({ cls: "tf-hint" });
+		const joinEl = el.createDiv({ cls: "tf-join" });
 		const bodyEl = el.createDiv({ cls: "tf-row-body" });
-		const row: Row = { job, state: { kind: "waiting" }, selected: -1, el, bodyEl, badgeEl, hintEl, playEl };
+		const row: Row = { job, state: { kind: "waiting" }, selected: -1, el, bodyEl, badgeEl, hintEl, joinEl, playEl, join: null };
 		playEl.onclick = () => this.togglePlay(row);
 		this.renderBody(row);
 		return row;
@@ -288,7 +292,7 @@ export class IdentifyModal extends Modal {
 	}
 
 	private titleFor(c: Candidate): { title: string; note: string | null } {
-		const note = this.opts.vaultTunes.find(c.aliases);
+		const note = this.opts.vaultTunes.find(c.aliases, c.tune_id);
 		return { title: note ? note.basename : displayName(c.name), note: note ? note.basename : null };
 	}
 
@@ -361,9 +365,60 @@ export class IdentifyModal extends Modal {
 
 	// ------------------------------------------------------------ results
 
+	/**
+	 * The row for the section just before this one in the same loops block,
+	 * when both look like the same tune: this row's pick (or its best guess,
+	 * when it is unsure) is the tune picked for that one. trad-split now and
+	 * then marks a change in the middle of a tune.
+	 */
+	private sameTuneBefore(row: Row): { before: Row; candidate: Candidate } | null {
+		const seg = row.job.segment;
+		if (seg.section < 2 || !this.opts.onInsert || !this.opts.noteOptions || this.detected.has(seg.anchorKey)) return null;
+		const before = this.rows[this.rows.indexOf(row) - 1];
+		if (!before || before.job.segment.anchorKey !== seg.anchorKey || before.job.segment.section !== seg.section - 1) return null;
+		if (row.state.kind !== "done" || before.state.kind !== "done" || before.selected < 0) return null;
+		const theirs = before.state.result.candidates[before.selected];
+		const mine = row.selected >= 0 ? row.state.result.candidates[row.selected] : row.state.result.confidence === "unsure" ? row.state.result.candidates[0] : undefined;
+		return theirs && mine && theirs.tune_id === mine.tune_id ? { before, candidate: theirs } : null;
+	}
+
+	/** Offer to join each section that is the same tune as the one before. */
+	private refreshJoins(): void {
+		for (const row of this.rows) {
+			const same = this.sameTuneBefore(row);
+			row.joinEl.empty();
+			if (!same) {
+				row.join = null;
+				continue;
+			}
+			// Ticked to begin with when this section's own match is good enough to have been picked.
+			if (row.join === null) row.join = row.selected >= 0;
+			const label = row.joinEl.createEl("label", { cls: "tf-option" });
+			const box = label.createEl("input", { type: "checkbox" });
+			box.checked = row.join;
+			box.onchange = () => {
+				row.join = box.checked;
+				this.updateButtons();
+			};
+			label.appendText(`Same tune as the section before (${this.titleFor(same.candidate).title}). Join the two sections`);
+		}
+	}
+
+	/** Sections to join to the one before, by anchor key. */
+	private joins(): Map<string, number[]> {
+		const out = new Map<string, number[]>();
+		for (const row of this.rows) {
+			if (!row.join) continue;
+			const key = row.job.segment.anchorKey;
+			out.set(key, [...(out.get(key) ?? []), row.job.segment.section]);
+		}
+		return out;
+	}
+
 	private choices(): Choice[] {
 		const out: Choice[] = [];
 		for (const row of this.rows) {
+			if (row.join) continue;
 			if (row.state.kind !== "done" || row.selected < 0) continue;
 			const candidate = row.state.result.candidates[row.selected];
 			if (!candidate) continue;
@@ -375,8 +430,9 @@ export class IdentifyModal extends Modal {
 
 	private updateButtons(): void {
 		if (!this.copyButton) return;
+		this.refreshJoins();
 		const finished = this.rows.every((r) => r.state.kind === "done" || r.state.kind === "error");
-		const any = this.choices().length > 0 || this.detected.size > 0;
+		const any = this.choices().length > 0 || this.detected.size > 0 || this.joins().size > 0;
 		if (this.insertButton) this.insertButton.disabled = !finished || !any;
 		this.copyButton.disabled = !finished || !any;
 	}
@@ -390,7 +446,7 @@ export class IdentifyModal extends Modal {
 		if (!this.opts.onInsert || !this.insertButton) return;
 		this.insertButton.disabled = true;
 		try {
-			const message = await this.opts.onInsert(this.choices(), this.detected);
+			const message = await this.opts.onInsert(this.choices(), this.detected, this.joins());
 			new Notice(message);
 			this.close();
 		} catch (e) {

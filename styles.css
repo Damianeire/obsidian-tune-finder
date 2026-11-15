@@ -187,3 +187,12 @@
 	overflow-y: auto;
 	color: var(--text-muted);
 }
+
+.tf-join:empty {
+	display: none;
+}
+
+.tf-join {
+	margin: 4px 0 2px 28px;
+	font-size: var(--font-ui-small);
+}
