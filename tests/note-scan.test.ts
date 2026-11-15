@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { analysisWindow, findAnchors, segmentsFor } from "../src/note-scan.ts";
+import { analysisWindow, findAnchors, retryWindows, segmentsFor } from "../src/note-scan.ts";
 import { ANDERSONS, HILL_OF_TARA } from "./fixtures.ts";
 
 test("a loops block under an embed is one anchor, with a segment per section", () => {
@@ -79,4 +79,22 @@ test("analysisWindow stays inside the section and the file", () => {
 	assert.deepEqual(analysisWindow({ ...seg, end: null }, 300, 60), { start: 100, end: 160 });
 	assert.deepEqual(analysisWindow({ ...seg, end: null }, 120, 60), { start: 100, end: 120 });
 	assert.deepEqual(analysisWindow({ ...seg, end: null }, 300, 0), { start: 100, end: 300 });
+});
+
+test("retryWindows listens again at the end of a section, when that is somewhere new", () => {
+	const seg = { anchorKey: "", link: "", start: 0, end: 71, label: "", rangeText: "x", section: 1 };
+	assert.deepEqual(retryWindows(seg, 300, 60), [
+		{ start: 11, end: 71 },
+		{ start: 41, end: 71 },
+	]);
+	// Barely longer than the first window: only the short one is new.
+	assert.deepEqual(retryWindows({ ...seg, end: 65 }, 300, 60), [{ start: 35, end: 65 }]);
+	// The first window already covered the whole section.
+	assert.deepEqual(retryWindows({ ...seg, end: 35 }, 300, 60), []);
+	// To the end of the file when the section has no end.
+	assert.deepEqual(retryWindows({ ...seg, start: 100, end: null }, 300, 60), [
+		{ start: 240, end: 300 },
+		{ start: 270, end: 300 },
+	]);
+	assert.deepEqual(retryWindows(seg, 300, 0), []);
 });

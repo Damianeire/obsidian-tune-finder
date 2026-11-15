@@ -22,6 +22,8 @@ export const INDEX_MEDIAN_PITCH = 71;
 
 export interface Scored {
 	score: number;
+	/** thesession.org tune id, when known: other settings of the top tune don't count as a runner-up. */
+	tune_id?: string;
 }
 
 export type Confidence = "likely" | "possible" | "unsure";
@@ -33,15 +35,34 @@ export type Confidence = "likely" | "possible" | "unsure";
 const LIKELY_SCORE = 0.4;
 const LIKELY_MARGIN = 0.1;
 const POSSIBLE_SCORE = 0.3;
+// A top score this high was right every time, however close the runner-up
+// (often a tune that shares a part with it).
+const SURE_SCORE = 0.6;
+/** Below this the top result was never right: the audio matches nothing in the index. */
+export const NO_MATCH_SCORE = 0.25;
 /** How much a transposed search must beat the untransposed one by. */
 const TRANSPOSE_GAIN = 0.15;
 
 export function confidence(results: Scored[]): Confidence {
 	const top = results[0]?.score ?? 0;
-	const margin = top - (results[1]?.score ?? 0);
-	if (top >= LIKELY_SCORE && margin >= LIKELY_MARGIN) return "likely";
+	const id = results[0]?.tune_id;
+	const runnerUp = results.slice(1).find((r) => id === undefined || r.tune_id !== id);
+	const margin = top - (runnerUp?.score ?? 0);
+	if (top >= SURE_SCORE || (top >= LIKELY_SCORE && margin >= LIKELY_MARGIN)) return "likely";
 	if (top >= POSSIBLE_SCORE) return "possible";
 	return "unsure";
+}
+
+const RANK: Record<Confidence, number> = { unsure: 0, possible: 1, likely: 2 };
+
+/** Whether result `a` is a better match than `b`: more confident, or as confident with a higher top score. */
+export function isBetterMatch(a: { confidence: Confidence; top: number }, b: { confidence: Confidence; top: number }): boolean {
+	return RANK[a.confidence] !== RANK[b.confidence] ? RANK[a.confidence] > RANK[b.confidence] : a.top > b.top;
+}
+
+/** True when the best score is so low that nothing in the index resembles the audio. */
+export function matchesNothing(results: Scored[]): boolean {
+	return (results[0]?.score ?? 0) < NO_MATCH_SCORE;
 }
 
 export function contourPitches(contour: string): number[] {

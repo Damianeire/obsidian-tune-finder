@@ -6,7 +6,7 @@ import { formatChoice, formatPlain, insertChoices, type Choice, type InsertResul
 import { IdentifyModal, type Job } from "./identify-modal.ts";
 import { AUDIO_EXTENSIONS, findAnchors, isAudioPath, segmentsFor } from "./note-scan.ts";
 import { DEFAULT_SETTINGS, TuneFinderSettingTab, type TuneFinderSettings } from "./settings.ts";
-import { VaultTunes, type TuneNote } from "./vault-match.ts";
+import { VaultTunes, sessionTuneId, type TuneNote } from "./vault-match.ts";
 
 export default class TuneFinderPlugin extends Plugin {
 	settings!: TuneFinderSettings;
@@ -125,13 +125,14 @@ export default class TuneFinderPlugin extends Plugin {
 			vaultTunes: this.vaultTunes(),
 			insertLabel: "Add to note",
 			noteOptions: true,
-			onInsert: async (choices, detected) => {
+			onInsert: async (choices, detected, joins) => {
 				let result: InsertResult | null = null;
 				await this.app.vault.process(note, (current) => {
 					result = insertChoices(current, choices, {
 						nameLoops: this.settings.nameLoops,
 						addList: this.settings.addList,
 						detected,
+						joins,
 					});
 					return result.text;
 				});
@@ -200,7 +201,7 @@ export default class TuneFinderPlugin extends Plugin {
 			const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
 			const raw: unknown = fm?.aliases ?? fm?.alias;
 			const aliases = Array.isArray(raw) ? raw.map(String) : typeof raw === "string" ? [raw] : [];
-			notes.push({ basename: file.basename, aliases });
+			notes.push({ basename: file.basename, aliases, sessionTune: sessionTuneId(fm?.session) });
 		}
 		return new VaultTunes(notes);
 	}
@@ -233,11 +234,13 @@ function insertMessage(r: InsertResult, noteName: string): string {
 	const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 	const parts: string[] = [];
 	if (r.blocks) parts.push(`added ${count(r.blocks, "loops block", "loops blocks")}`);
+	if (r.joined) parts.push(`joined ${count(r.joined, "split tune", "split tunes")}`);
 	if (r.named) parts.push(`named ${count(r.named, "loop section", "loop sections")}`);
 	if (r.listed) parts.push(`listed ${count(r.listed, "tune", "tunes")}`);
 	let message = parts.length
 		? `${parts.join(", ").replace(/, ([^,]*)$/, " and $1").replace(/^./, (c) => c.toUpperCase())} in ${noteName}.`
 		: "Nothing to change: those loop sections already have names, and the list is turned off.";
+	if (r.joined) message += " If another note has a loops block for the same recording, join the sections there too.";
 	if (r.missing.length) message += " The note changed while identifying, so some recordings weren't found; run it again.";
 	return message;
 }

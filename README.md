@@ -14,8 +14,9 @@ It works one tune at a time. A recording with a `loops` block (from trad-split's
 
 The results window lists the best candidates for each tune or section:
 - dance type, key, how well it matched, and a link to the tune on thesession.org;
-- a **Likely**, **Possible** or **Unsure** label;
-- **in vault** when you already have a note for that tune (matched by any of the tune's names, or the note's aliases);
+- a **Likely**, **Possible** or **Unsure** label. Likely means a clear lead over the next tune, or a match of 60% or more whatever the next tune scored;
+- **No match** when nothing on thesession.org resembles the audio (every candidate under 25%): most likely a song, an air, talk, or a tune that isn't there. The closest tunes are still there behind **Show the closest anyway**;
+- **in vault** when you already have a note for that tune. A note whose `session` property links to the tune on thesession.org is matched first. Otherwise it goes by any of the tune's names, or the note's aliases, but never to a note whose `session` link is a different tune;
 - a ▶ button that plays the section, so you can check by ear.
 
 Pick a candidate for each section, or "None of these", then **Add to note**. Two things can happen, each with a tick box in the window (and in Settings):
@@ -36,6 +37,14 @@ Identified tunes:
 ````
 
 A name is the tune's note in your vault when there is one, so links and Export tunes find it. Running it again replaces the list instead of adding another. Keys and dance types are written the way the vault's `key` and `type` properties are ("D", "A min", "E dor", "Slip Jig").
+
+### When the start of a section matches nothing
+
+A section's start can be a messy lead-in, or the tail of the tune before. When the start comes out Unsure, Tune Finder listens again at the end of the section (its last minute, then its last half minute) and keeps the best of the answers. The row then says where the match was heard from. A match found this way is only picked for you when it is Likely; otherwise check it by ear and pick it yourself.
+
+### Tunes split in two
+
+trad-split now and then marks a change in the middle of a tune, so one tune ends up as two sections. When a section comes out as the same tune as the section before it, the window says so, with a tick box: **Same tune as the section before. Join the two sections**. It is ticked to begin with when both sections have a pick, and unticked when the tune is only the best guess for one of them. When the two picks are different tunes on thesession.org that share a name (there are three called "McDonagh's"), it reads **May be the same tune** and is left unticked. If the first of the two sections had no pick of its own, the joined section takes the second one's. With it ticked, **Add to note** makes the two lines of the loops block one, running from the start of the first to the end of the second, and lists the tune once. If another note has a loops block for the same recording, join the sections there too, or the Audio Loop Player will say the blocks differ.
 
 ### Long recordings without loops
 

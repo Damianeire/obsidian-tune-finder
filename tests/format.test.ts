@@ -204,3 +204,63 @@ test("a scanned recording gets a new loops block under its embed, then the list"
 	assert.ok(anchors[0].loops);
 	assert.equal(segmentsFor(anchors[0]).length, 2);
 });
+
+const SPLIT_SET = `## Set 14
+
+![[Sessions/Clock/27 Set 14.m4a]]
+\`\`\`loops
+file: Sessions/Clock/27 Set 14.m4a
+0:00 - 1:50.5 | Tune 1
+1:48.5 - 3:39 | Fred Finn's
+3:37 - 5:00 | Tune 3
+4:58 - 5:29 | Tune 4 ?
+\`\`\`
+
+tunes::
+`;
+
+test("a section that is the same tune as the one before is joined to it", () => {
+	const segs = findAnchors(SPLIT_SET).flatMap(segmentsFor);
+	const castle = candidate("castle kelly", "21", "reel", "Aminor");
+	const choices: Choice[] = [
+		{ segment: segs[0], candidate: candidate("bird in the bush, the", "629"), title: "Bird in the Bush", note: null },
+		{ segment: segs[2], candidate: castle, title: "Castlekelly", note: "Castlekelly" },
+	];
+	const joins = new Map([[segs[0].anchorKey, [4]]]);
+	const r = insertChoices(SPLIT_SET, choices, { nameLoops: true, addList: true, joins });
+	assert.equal(r.joined, 1);
+	assert.equal(r.named, 2);
+	const lines = r.text.split("\n");
+	assert.deepEqual(lines.slice(3, 9), [
+		"```loops",
+		"file: Sessions/Clock/27 Set 14.m4a",
+		"0:00 - 1:50.5 | Bird in the Bush",
+		"1:48.5 - 3:39 | Fred Finn's",
+		"3:37 - 5:29 | Castlekelly",
+		"```",
+	]);
+	assert.equal(lines[9], "Identified tunes:");
+	assert.equal(lines[11], "- 3:37 - 5:29: [[Castlekelly]], Reel, A min ([thesession](https://thesession.org/tunes/21#setting210))");
+	assert.equal(lines[12], "");
+	assert.equal(lines[13], "tunes::");
+	// The block still reads as three sections.
+	assert.equal(findAnchors(r.text)[0].loops?.block.sections.length, 3);
+});
+
+test("joining works without names or a list, runs of three, and keeps a name from the later half", () => {
+	const text = SPLIT_SET.replace("Tune 4 ?", "Castlekelly").replace("1:48.5 - 3:39 | Fred Finn's", "1:48.5 - 3:39 | Tune 2");
+	const key = findAnchors(text)[0].key;
+	const r = insertChoices(text, [], { nameLoops: false, addList: false, joins: new Map([[key, [3, 4]]]) });
+	assert.equal(r.joined, 2);
+	assert.deepEqual(r.text.split("\n").slice(5, 8), ["0:00 - 1:50.5 | Tune 1", "1:48.5 - 5:29 | Castlekelly", "```"]);
+	// A pick for a section that was joined away is dropped, not listed twice.
+	const segs = findAnchors(SPLIT_SET).flatMap(segmentsFor);
+	const c = candidate("castle kelly", "21");
+	const both = insertChoices(SPLIT_SET, [{ segment: segs[2], candidate: c, title: "Castlekelly", note: null }, { segment: segs[3], candidate: c, title: "Castlekelly", note: null }], {
+		nameLoops: true,
+		addList: true,
+		joins: new Map([[key, [4]]]),
+	});
+	assert.equal(both.listed, 1);
+	assert.equal(both.text.match(/Castlekelly/g)?.length, 2);
+});

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CONTOUR_CHARS, confidence, medianPitch, octaveCorrection, searchWithCorrection, transpose } from "../src/search.ts";
+import { CONTOUR_CHARS, confidence, medianPitch, octaveCorrection, searchWithCorrection, transpose, isBetterMatch, matchesNothing } from "../src/search.ts";
 import { VaultTunes } from "../src/vault-match.ts";
 
 const at = (midi: number) => CONTOUR_CHARS[midi - 48];
@@ -24,6 +24,22 @@ test("confidence tiers", () => {
 	assert.equal(confidence([{ score: 0.45 }, { score: 0.4 }]), "possible");
 	assert.equal(confidence([{ score: 0.2 }, { score: 0.1 }]), "unsure");
 	assert.equal(confidence([]), "unsure");
+});
+
+test("a very high score is likely however close the runner-up, and other settings of the top tune are not a runner-up", () => {
+	assert.equal(confidence([{ score: 0.75 }, { score: 0.66 }]), "likely");
+	assert.equal(confidence([{ score: 0.57 }, { score: 0.52 }]), "possible");
+	assert.equal(confidence([{ score: 0.5, tune_id: "1" }, { score: 0.45, tune_id: "1" }, { score: 0.2, tune_id: "2" }]), "likely");
+	assert.equal(confidence([{ score: 0.5, tune_id: "1" }, { score: 0.45, tune_id: "2" }]), "possible");
+});
+
+test("isBetterMatch goes by confidence, then score; matchesNothing is a very low top score", () => {
+	assert.equal(isBetterMatch({ confidence: "possible", top: 0.31 }, { confidence: "unsure", top: 0.29 }), true);
+	assert.equal(isBetterMatch({ confidence: "unsure", top: 0.2 }, { confidence: "unsure", top: 0.25 }), false);
+	assert.equal(isBetterMatch({ confidence: "possible", top: 0.5 }, { confidence: "likely", top: 0.45 }), false);
+	assert.equal(matchesNothing([{ score: 0.19 }]), true);
+	assert.equal(matchesNothing([{ score: 0.28 }]), false);
+	assert.equal(matchesNothing([]), true);
 });
 
 test("searchWithCorrection keeps a strong untransposed result and only tries others when weak", () => {
@@ -61,4 +77,22 @@ test("VaultTunes finds notes by any name of the tune, and by close spelling only
 	assert.equal(tunes.find(["ballydesmond polka no. 2"])?.basename, "Ballydesmond No. 2");
 	assert.equal(tunes.find(["nora chriona"])?.basename, "Nora Crionna");
 	assert.equal(tunes.find(["the kesh"]), null);
+});
+
+test("VaultTunes goes by the note's session link before its name", () => {
+	const tunes = new VaultTunes([
+		{ basename: "Killavil Reel", aliases: [], sessionTune: "1723" },
+		{ basename: "Kilavil Jig", aliases: [], sessionTune: "667" },
+		{ basename: "Charlie Lennon's", aliases: [], sessionTune: "2115" },
+		{ basename: "The Kesh", aliases: [] },
+	]);
+	// "The Killavil" is a jig; "reel" and "jig" are ignored in names, so only the link tells them apart.
+	assert.equal(tunes.find(["killavil, the"], "667")?.basename, "Kilavil Jig");
+	assert.equal(tunes.find(["killavil, the"], "1723")?.basename, "Killavil Reel");
+	// Another tune that shares a name with a linked note doesn't get that note.
+	assert.equal(tunes.find(["sweeney's buttermilk", "charlie lennon's"], "556"), null);
+	assert.equal(tunes.find(["charlie lennon's"], "2115")?.basename, "Charlie Lennon's");
+	// Notes with no link are matched by name as before, and so is a search with no tune id.
+	assert.equal(tunes.find(["kesh, the"], "55")?.basename, "The Kesh");
+	assert.equal(tunes.find(["charlie lennon's"])?.basename, "Charlie Lennon's");
 });
