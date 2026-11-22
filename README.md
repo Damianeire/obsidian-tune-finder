@@ -18,6 +18,7 @@ The results window lists the best candidates for each tune or section:
 - **No match** when nothing on thesession.org resembles the audio (every candidate under 25%): most likely a song, an air, talk, or a tune that isn't there. The closest tunes are still there behind **Show the closest anyway**;
 - **in vault** when you already have a note for that tune. A note whose `session` property links to the tune on thesession.org is matched first. Otherwise it goes by any of the tune's names, or the note's aliases, but never to a note whose `session` link is a different tune;
 - a ▶ button that plays the section, so you can check by ear.
+- a ♪ button on each candidate that plays its setting from thesession.org, so you can compare it with the section. It is a plain synthesised melody from the tune index, at a steady pace for the dance type, moved to the pitch the recording seems to be in. Held and repeated notes run together, and dotted rhythms, triplets and rolls are flattened to even quavers, but it is enough to hear whether it is the tune.
 
 Pick a candidate for each section, or "None of these", then **Add to note**. Two things can happen, each with a tick box in the window (and in Settings):
 

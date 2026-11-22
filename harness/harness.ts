@@ -6,6 +6,7 @@ import { EngineClient } from "../src/engine-client.ts";
 import { SAMPLE_RATE, monoSlice } from "../src/audio.ts";
 import { displayName } from "../src/names.ts";
 import { scanRecording } from "../src/scan.ts";
+import { melodyNotes, MelodyPlayer } from "../src/melody.ts";
 
 const out = document.getElementById("out")!;
 const statusEl = document.getElementById("status")!;
@@ -48,6 +49,21 @@ async function run(): Promise<void> {
 			const tunes = await engine.lookupNames([name]);
 			log(`\nnames "${name}": ${tunes.map((t) => `${displayName(t.name)} [${t.matchedBy}] ${t.settings.length} settings, first ${t.settings[0]?.dance} ${t.settings[0]?.mode}`).join("; ") || "none"}`);
 		}
+	}
+	const setting = params.get("setting");
+	if (setting) {
+		const t5 = performance.now();
+		const contour = await engine.settingContour(setting);
+		const notes = melodyNotes(contour, params.get("dance") ?? "reel");
+		log(`\nsetting ${setting}: ${contour.length} quavers, ${notes.length} notes, read in ${Math.round(performance.now() - t5)} ms`);
+		log(`  ${contour.slice(0, 64)}`);
+		log(`  first notes (midi): ${notes.slice(0, 8).map((n) => n.midi).join(" ")}`);
+		const player = new MelodyPlayer();
+		const button = document.createElement("button");
+		button.textContent = "Play setting";
+		button.onclick = () => player.play(notes, () => log("  playback ended"));
+		document.body.prepend(button);
+		(window as unknown as { harnessPlay: () => void }).harnessPlay = () => button.click();
 	}
 	const scanFile = params.get("scan");
 	if (scanFile) {

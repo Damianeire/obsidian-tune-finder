@@ -54,6 +54,11 @@ export class EngineClient {
 		return (await this.call({ type: "lookupNames", names })) as TuneInfo[];
 	}
 
+	/** A setting's melody as a contour string (one character per quaver); empty if unknown. */
+	async settingContour(settingId: string): Promise<string> {
+		return (await this.call({ type: "contour", settingId })) as string;
+	}
+
 	/** Download the latest tune index now. */
 	async refreshIndex(progress: ProgressReporter): Promise<IndexInfo> {
 		this.ready = this.download(progress);

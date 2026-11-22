@@ -7,6 +7,7 @@ import { maxDecodeSeconds, SAMPLE_RATE, audioDuration, decodeAudioFile, monoSlic
 import type { IdentifyResult } from "./engine-protocol.ts";
 import { formatDance, formatKey, formatPlain, sessionUrl, type Candidate, type Choice, type DetectedSections } from "./format.ts";
 import { formatTime } from "./loops.ts";
+import { melodyNotes, MelodyPlayer } from "./melody.ts";
 import { displayName, nameKey } from "./names.ts";
 import { analysisWindow, retryWindows, type Segment } from "./note-scan.ts";
 import { scanRecording } from "./scan.ts";
@@ -75,6 +76,9 @@ export class IdentifyModal extends Modal {
 	private cancelled = false;
 	private audio: HTMLAudioElement | null = null;
 	private playing: Row | null = null;
+	private melody = new MelodyPlayer();
+	/** The candidate button whose tune is playing. */
+	private melodyButton: HTMLElement | null = null;
 
 	constructor(plugin: TuneFinderPlugin, opts: IdentifyModalOptions) {
 		super(plugin.app);
@@ -123,6 +127,7 @@ export class IdentifyModal extends Modal {
 	onClose(): void {
 		this.cancelled = true;
 		this.stopAudio();
+		this.melody.dispose();
 		this.contentEl.empty();
 	}
 
@@ -391,6 +396,13 @@ export class IdentifyModal extends Modal {
 			link.onclick = (e) => e.stopPropagation();
 			const others = [...new Set(c.aliases.map(displayName))].filter((a) => a !== title).slice(0, 3);
 			if (others.length) text.createDiv({ text: `Also known as ${others.join(", ")}`, cls: "tf-muted tf-small" });
+			const tune = label.createDiv({ cls: "clickable-icon tf-play-tune", attr: { "aria-label": "Play this tune" } });
+			setIcon(tune, "music");
+			tune.onclick = (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				void this.toggleTune(tune, c, result.detune);
+			};
 		});
 		const none = list.createEl("label", { cls: "tf-candidate tf-none" });
 		const noneRadio = none.createEl("input", { type: "radio", attr: { name } });
@@ -514,12 +526,48 @@ export class IdentifyModal extends Modal {
 
 	// ------------------------------------------------------------ listening
 
+	/**
+	 * Play a candidate's setting from thesession.org, at the pitch the
+	 * recording seems to be in, to compare with the section by ear.
+	 */
+	private async toggleTune(button: HTMLElement, c: Candidate, detune: number): Promise<void> {
+		const again = this.melodyButton === button;
+		this.stopAudio();
+		this.stopTune();
+		if (again) return;
+		this.melodyButton = button;
+		setIcon(button, "square");
+		button.setAttr("aria-label", "Stop");
+		let contour: string;
+		try {
+			contour = await this.plugin.engine.settingContour(c.setting_id);
+		} catch (e) {
+			new Notice(`Couldn't play the tune: ${(e as Error).message}`);
+			contour = "";
+		}
+		if (this.melodyButton !== button || this.cancelled) return;
+		if (!contour) new Notice("This setting has no notes in the tune index.");
+		this.melody.play(melodyNotes(contour, c.dance, -detune), () => this.stopTune());
+	}
+
+	/** Stop the candidate's tune, also when it is still loading. */
+	private stopTune(): void {
+		const button = this.melodyButton;
+		this.melodyButton = null;
+		this.melody.stop();
+		if (button) {
+			setIcon(button, "music");
+			button.setAttr("aria-label", "Play this tune");
+		}
+	}
+
 	private togglePlay(row: Row): void {
 		if (this.playing === row) {
 			this.stopAudio();
 			return;
 		}
 		this.stopAudio();
+		this.stopTune();
 		const seg = row.job.segment;
 		const audio = new Audio(this.app.vault.getResourcePath(row.job.file));
 		const stopAt = seg.end ?? seg.start + this.plugin.settings.analyseSeconds;
