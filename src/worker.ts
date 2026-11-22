@@ -8,6 +8,7 @@ import { initSync, Engine } from "../engine/pkg/tune_finder_engine.js";
 import wasmBytes from "../engine/pkg/tune_finder_engine_bg.wasm";
 import { INDEX_META_URL, INDEX_URL, type IdentifyResult, type IndexInfo, type Request, type Response, type TuneInfo } from "./engine-protocol.ts";
 import type { Candidate } from "./format.ts";
+import { contourFromIndexJson } from "./melody.ts";
 import { levenshtein, nameKey } from "./names.ts";
 import { searchWithCorrection } from "./search.ts";
 
@@ -74,6 +75,7 @@ async function loadCached(): Promise<IndexInfo | null> {
 	if (!json || !aliasJson) return null;
 	engine.load_index(json);
 	aliases = JSON.parse(aliasJson);
+	contours.clear();
 	nameIndex = null;
 	return info;
 }
@@ -128,6 +130,7 @@ async function install(onProgress: (loaded: number, total: number) => void): Pro
 	const settings = engine.load_index(json);
 	aliases = index.aliases;
 	nameIndex = null;
+	contours.clear();
 	const info: IndexInfo = { version, savedAt: Date.now(), settings };
 	await dbPutAll([
 		["index", json],
@@ -207,6 +210,22 @@ function lookupNames(names: string[]): TuneInfo[] {
 	}));
 }
 
+// ---------------------------------------------------------------- melodies
+
+/** Contours already read, by setting id. */
+const contours = new Map<string, string>();
+
+/** A setting's melody, read from the stored index (the engine keeps no copy it can hand back). */
+async function settingContour(settingId: string): Promise<string> {
+	const known = contours.get(settingId);
+	if (known !== undefined) return known;
+	const json = await dbGet<string>("index");
+	if (!json) throw new Error("The tune index isn't stored on this device");
+	const contour = contourFromIndexJson(json, settingId);
+	contours.set(settingId, contour);
+	return contour;
+}
+
 // ---------------------------------------------------------------- messages
 
 async function handle(id: number, req: Request): Promise<unknown> {
@@ -223,6 +242,8 @@ async function handle(id: number, req: Request): Promise<unknown> {
 			return identify(req.pcm, req.sampleRate, req.count, req.hint, req.explore);
 		case "lookupNames":
 			return lookupNames(req.names);
+		case "contour":
+			return settingContour(req.settingId);
 	}
 }
 

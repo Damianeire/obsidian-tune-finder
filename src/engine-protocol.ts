@@ -21,7 +21,8 @@ export type Request =
 	| { type: "install" }
 	| { type: "remoteVersion" }
 	| { type: "identify"; pcm: Float32Array; sampleRate: number; count: number; hint: number | null; explore: boolean }
-	| { type: "lookupNames"; names: string[] };
+	| { type: "lookupNames"; names: string[] }
+	| { type: "contour"; settingId: string };
 
 /** A tune on thesession.org and its settings (versions), oldest first. */
 export interface TuneInfo {

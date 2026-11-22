@@ -135,6 +135,11 @@ export interface InsertOptions {
 	addList: boolean;
 	/** For scanned recordings, by anchor key: a new loops block to write under the embed. */
 	detected?: Map<string, DetectedSections>;
+	/**
+	 * By anchor key: sections (numbered from 1) that are the same tune as the
+	 * section before, to be joined to it in the loops block.
+	 */
+	joins?: Map<string, number[]>;
 }
 
 export interface InsertResult {
@@ -147,6 +152,27 @@ export interface InsertResult {
 	listed: number;
 	/** New loops blocks written. */
 	blocks: number;
+	/** Loop sections joined to the section before. */
+	joined: number;
+}
+
+/** "1:22" and "4:22" from "1:22 - 4:22"; the end is "" when none is written. */
+function rangeParts(rangeText: string): [string, string] {
+	const m = rangeText.match(/^(\S+)\s*-\s*(\S*)$/);
+	return m ? [m[1], m[2]] : [rangeText, ""];
+}
+
+/**
+ * Groups of sections that become one, as [first, last] zero-based indexes,
+ * for a block where the sections numbered `joins` (from 1) join the one before.
+ */
+function joinGroups(count: number, joins: number[]): [number, number][] {
+	const groups: [number, number][] = [];
+	for (let i = 0; i < count; i++) {
+		if (i > 0 && joins.includes(i + 1)) groups[groups.length - 1][1] = i;
+		else groups.push([i, i]);
+	}
+	return groups.filter(([a, b]) => b > a);
 }
 
 /**
@@ -168,18 +194,40 @@ export function insertChoices(text: string, choices: Choice[], opts: InsertOptio
 		list.push(c);
 		byKey.set(c.segment.anchorKey, list);
 	}
-	const result: InsertResult = { text, missing: [], named: 0, listed: 0, blocks: 0 };
-	for (const key of new Set([...byKey.keys(), ...detected.keys()])) {
+	const joins = opts.joins ?? new Map<string, number[]>();
+	const result: InsertResult = { text, missing: [], named: 0, listed: 0, blocks: 0, joined: 0 };
+	for (const key of new Set([...byKey.keys(), ...detected.keys(), ...joins.keys()])) {
 		if (!anchors.some((a) => a.key === key)) result.missing.push(key);
 	}
 	const withCr = (add: string[]) => (crlf ? add.map((l) => `${l}\r`) : add);
 
 	// Bottom up, so earlier line numbers stay valid.
 	const targets = anchors
-		.filter((a) => byKey.has(a.key) || detected.has(a.key))
+		.filter((a) => byKey.has(a.key) || detected.has(a.key) || joins.has(a.key))
 		.sort((a, b) => b.insertAfterLine - a.insertAfterLine);
 	for (const anchor of targets) {
-		const list = (byKey.get(anchor.key) ?? []).sort((a, b) => a.segment.start - b.segment.start);
+		let list = (byKey.get(anchor.key) ?? []).sort((a, b) => a.segment.start - b.segment.start);
+
+		// Sections joined to the one before: the first of each group runs to
+		// the end of the last, and the others have no pick of their own.
+		const sections = anchor.loops?.block.sections ?? [];
+		const groups = anchor.loops && anchor.loops.block.select === null ? joinGroups(sections.length, joins.get(anchor.key) ?? []) : [];
+		const mergedRange = ([a, b]: [number, number]) => {
+			const end = rangeParts(sections[b].rangeText)[1];
+			return `${rangeParts(sections[a].rangeText)[0]} -${end ? ` ${end}` : ""}`;
+		};
+		if (groups.length) {
+			list = list
+				.filter((c) => !groups.some(([a, b]) => c.segment.section - 1 > a && c.segment.section - 1 <= b))
+				.map((c) => {
+					const group = groups.find(([a]) => a === c.segment.section - 1);
+					if (!group) return c;
+					const last = sections[group[1]];
+					const next = sections[group[1] + 1];
+					const end = last.end ?? (next && next.start > last.start ? next.start : null);
+					return { ...c, segment: { ...c.segment, end, rangeText: mergedRange(group) } };
+				});
+		}
 
 		// Names into an existing block's sections. Only the line's label
 		// changes, so no line numbers move.
@@ -196,7 +244,10 @@ export function insertChoices(text: string, choices: Choice[], opts: InsertOptio
 
 		const newBlock = !anchor.loops && anchor.listIndent === null ? detected.get(anchor.key) : undefined;
 		const listing = opts.addList && list.length > 0;
-		if (!newBlock && !listing) continue;
+		if (!newBlock && !listing) {
+			joinSections(lines, anchor, groups, mergedRange, result);
+			continue;
+		}
 
 		const at = anchor.insertAfterLine;
 		const remove = listing ? previousResultLength(lines, at, anchor) : 0;
@@ -214,7 +265,43 @@ export function insertChoices(text: string, choices: Choice[], opts: InsertOptio
 		const after = lines[at + 1 + remove];
 		if (anchor.listIndent === null && after !== undefined && after.trim() !== "") add.push("");
 		lines.splice(at + 1, remove, ...withCr(add));
+		// Last, as it removes lines above the ones just written.
+		joinSections(lines, anchor, groups, mergedRange, result);
 	}
 	result.text = lines.join("\n");
 	return result;
+}
+
+/**
+ * Rewrite a loops block so each group of sections is one line: the first
+ * section's line, running to the end of the last. It keeps its own name
+ * unless that is a placeholder and a later section of the group has one.
+ */
+function joinSections(lines: string[], anchor: Anchor, groups: [number, number][], mergedRange: (g: [number, number]) => string, result: InsertResult): void {
+	if (!anchor.loops || groups.length === 0) return;
+	const { startLine, block } = anchor.loops;
+	const lineOf = (i: number) => startLine + 1 + block.sections[i].line;
+	const labelOf = (i: number) => {
+		const line = lines[lineOf(i)].replace(/\r$/, "");
+		const bar = line.indexOf("|");
+		return bar >= 0 ? line.slice(bar + 1).trim() : "";
+	};
+	// Bottom up, so earlier line numbers stay valid.
+	for (const group of [...groups].reverse()) {
+		const [a, b] = group;
+		let label = labelOf(a);
+		if (isPlaceholderLabel(label)) {
+			for (let i = a + 1; i <= b; i++) {
+				if (!isPlaceholderLabel(labelOf(i))) {
+					label = labelOf(i);
+					break;
+				}
+			}
+		}
+		const cr = lines[lineOf(a)].endsWith("\r") ? "\r" : "";
+		const indent = lines[lineOf(a)].match(/^\s*/)![0].replace(/\r$/, "");
+		lines[lineOf(a)] = `${indent}${mergedRange(group)}${label ? ` | ${label}` : ""}${cr}`;
+		for (let i = b; i > a; i--) lines.splice(lineOf(i), 1);
+		result.joined += b - a;
+	}
 }

@@ -7,9 +7,11 @@ import { maxDecodeSeconds, SAMPLE_RATE, audioDuration, decodeAudioFile, monoSlic
 import type { IdentifyResult } from "./engine-protocol.ts";
 import { formatDance, formatKey, formatPlain, sessionUrl, type Candidate, type Choice, type DetectedSections } from "./format.ts";
 import { formatTime } from "./loops.ts";
-import { displayName } from "./names.ts";
-import { analysisWindow, type Segment } from "./note-scan.ts";
+import { melodyNotes, MelodyPlayer } from "./melody.ts";
+import { displayName, nameKey } from "./names.ts";
+import { analysisWindow, retryWindows, type Segment } from "./note-scan.ts";
 import { scanRecording } from "./scan.ts";
+import { isBetterMatch, matchesNothing } from "./search.ts";
 import type { VaultTunes } from "./vault-match.ts";
 
 export interface Job {
@@ -23,7 +25,7 @@ type JobState =
 	| { kind: "waiting" }
 	| { kind: "scanning"; done: number; total: number }
 	| { kind: "running" }
-	| { kind: "done"; result: IdentifyResult }
+	| { kind: "done"; result: IdentifyResult; /** Start (seconds) of the stretch that matched, when it wasn't the section's start. */ heardFrom?: number }
 	| { kind: "error"; message: string };
 
 interface Row {
@@ -35,7 +37,12 @@ interface Row {
 	bodyEl: HTMLElement;
 	badgeEl: HTMLElement;
 	hintEl: HTMLElement;
+	joinEl: HTMLElement;
 	playEl: HTMLElement;
+	/** Join this section to the one before; null until that has been offered. */
+	join: boolean | null;
+	/** Show the closest tunes even though nothing resembles the audio. */
+	showAnyway: boolean;
 }
 
 export interface IdentifyModalOptions {
@@ -49,7 +56,7 @@ export interface IdentifyModalOptions {
 	 * Writes the picks (and new loops blocks for scanned recordings) and
 	 * returns a message for a notice. Without it there is only Copy.
 	 */
-	onInsert?: (choices: Choice[], detected: Map<string, DetectedSections>) => Promise<string>;
+	onInsert?: (choices: Choice[], detected: Map<string, DetectedSections>, joins: Map<string, number[]>) => Promise<string>;
 }
 
 const BADGE: Record<string, string> = { likely: "Likely", possible: "Possible", unsure: "Unsure" };
@@ -69,6 +76,9 @@ export class IdentifyModal extends Modal {
 	private cancelled = false;
 	private audio: HTMLAudioElement | null = null;
 	private playing: Row | null = null;
+	private melody = new MelodyPlayer();
+	/** The candidate button whose tune is playing. */
+	private melodyButton: HTMLElement | null = null;
 
 	constructor(plugin: TuneFinderPlugin, opts: IdentifyModalOptions) {
 		super(plugin.app);
@@ -117,6 +127,7 @@ export class IdentifyModal extends Modal {
 	onClose(): void {
 		this.cancelled = true;
 		this.stopAudio();
+		this.melody.dispose();
 		this.contentEl.empty();
 	}
 
@@ -199,8 +210,22 @@ export class IdentifyModal extends Modal {
 		this.setStatus(`Listening to ${this.rowName(row)} (${n} of ${this.rows.length})...`);
 		try {
 			const pcm = monoSlice(buffer, win.start, win.end);
-			const result = await this.plugin.engine.identify(pcm, SAMPLE_RATE, Math.max(10, this.plugin.settings.candidates));
-			this.setState(row, { kind: "done", result });
+			const count = Math.max(10, this.plugin.settings.candidates);
+			let result = await this.plugin.engine.identify(pcm, SAMPLE_RATE, count);
+			let heardFrom: number | undefined;
+			// The start of a section can be a messy lead-in or the tail of the
+			// tune before, so an unsure section gets a second listen at its end.
+			const again = result.confidence === "unsure" ? retryWindows(row.job.segment, buffer.duration, this.plugin.settings.analyseSeconds) : [];
+			const top = (r: IdentifyResult) => r.candidates[0]?.score ?? 0;
+			for (const win of again) {
+				if (this.cancelled) return;
+				const later = await this.plugin.engine.identify(monoSlice(buffer, win.start, win.end), SAMPLE_RATE, count);
+				if (isBetterMatch({ confidence: later.confidence, top: top(later) }, { confidence: result.confidence, top: top(result) })) {
+					result = later;
+					heardFrom = win.start;
+				}
+			}
+			this.setState(row, { kind: "done", result, heardFrom });
 		} catch (e) {
 			this.setState(row, { kind: "error", message: (e as Error).message });
 		}
@@ -271,8 +296,9 @@ export class IdentifyModal extends Modal {
 		}
 		const badgeEl = head.createDiv({ cls: "tf-badge" });
 		const hintEl = el.createDiv({ cls: "tf-hint" });
+		const joinEl = el.createDiv({ cls: "tf-join" });
 		const bodyEl = el.createDiv({ cls: "tf-row-body" });
-		const row: Row = { job, state: { kind: "waiting" }, selected: -1, el, bodyEl, badgeEl, hintEl, playEl };
+		const row: Row = { job, state: { kind: "waiting" }, selected: -1, el, bodyEl, badgeEl, hintEl, joinEl, playEl, join: null, showAnyway: false };
 		playEl.onclick = () => this.togglePlay(row);
 		this.renderBody(row);
 		return row;
@@ -281,14 +307,16 @@ export class IdentifyModal extends Modal {
 	private setState(row: Row, state: JobState): void {
 		row.state = state;
 		if (state.kind === "done") {
-			row.selected = state.result.confidence === "unsure" || state.result.candidates.length === 0 ? -1 : 0;
+			// A match found only later in the section is picked for you only when it is a strong one.
+			const pick = state.heardFrom === undefined ? state.result.confidence !== "unsure" : state.result.confidence === "likely";
+			row.selected = pick && state.result.candidates.length > 0 ? 0 : -1;
 		}
 		this.renderBody(row);
 		this.updateButtons();
 	}
 
 	private titleFor(c: Candidate): { title: string; note: string | null } {
-		const note = this.opts.vaultTunes.find(c.aliases);
+		const note = this.opts.vaultTunes.find(c.aliases, c.tune_id);
 		return { title: note ? note.basename : displayName(c.name), note: note ? note.basename : null };
 	}
 
@@ -317,6 +345,26 @@ export class IdentifyModal extends Modal {
 		const { result } = state;
 		badgeEl.setText(BADGE[result.confidence]);
 		badgeEl.addClass(`tf-badge-${result.confidence}`);
+		if (matchesNothing(result.candidates) && !row.showAnyway && row.selected < 0) {
+			badgeEl.setText("No match");
+			const line = bodyEl.createDiv({ cls: "tf-muted" });
+			line.appendText("Nothing on thesession.org resembles this. It may be a song, an air, talk, or a tune that isn't there. ");
+			if (result.candidates.length) {
+				const show = line.createEl("a", { text: "Show the closest anyway", href: "#" });
+				show.onclick = (e) => {
+					e.preventDefault();
+					row.showAnyway = true;
+					this.renderBody(row);
+				};
+			}
+			return;
+		}
+		if (state.heardFrom !== undefined) {
+			bodyEl.createDiv({
+				text: `The start of this section matched nothing, so this is from ${formatTime(state.heardFrom)} on. The section may begin with something else.`,
+				cls: "tf-muted tf-small",
+			});
+		}
 		if (result.detune !== 0) {
 			const n = Math.abs(result.detune);
 			const amount = n === 1 ? "a semitone" : n === 2 ? "a tone" : `${n} semitones`;
@@ -348,6 +396,13 @@ export class IdentifyModal extends Modal {
 			link.onclick = (e) => e.stopPropagation();
 			const others = [...new Set(c.aliases.map(displayName))].filter((a) => a !== title).slice(0, 3);
 			if (others.length) text.createDiv({ text: `Also known as ${others.join(", ")}`, cls: "tf-muted tf-small" });
+			const tune = label.createDiv({ cls: "clickable-icon tf-play-tune", attr: { "aria-label": "Play this tune" } });
+			setIcon(tune, "music");
+			tune.onclick = (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				void this.toggleTune(tune, c, result.detune);
+			};
 		});
 		const none = list.createEl("label", { cls: "tf-candidate tf-none" });
 		const noneRadio = none.createEl("input", { type: "radio", attr: { name } });
@@ -361,22 +416,92 @@ export class IdentifyModal extends Modal {
 
 	// ------------------------------------------------------------ results
 
+	/**
+	 * The row for the section just before this one in the same loops block,
+	 * when both look like the same tune. At least one of the two has a pick;
+	 * the other may only have that tune as its best guess. `sure` is false
+	 * when they are two thesession.org tunes that share a name. trad-split
+	 * now and then marks a change in the middle of a tune.
+	 */
+	private sameTuneBefore(row: Row): { before: Row; candidate: Candidate; sure: boolean } | null {
+		const seg = row.job.segment;
+		if (seg.section < 2 || !this.opts.onInsert || !this.opts.noteOptions || this.detected.has(seg.anchorKey)) return null;
+		const before = this.rows[this.rows.indexOf(row) - 1];
+		if (!before || before.job.segment.anchorKey !== seg.anchorKey || before.job.segment.section !== seg.section - 1) return null;
+		if (row.selected < 0 && before.selected < 0) return null;
+		const theirs = this.tuneOf(before);
+		const mine = this.tuneOf(row);
+		if (!theirs || !mine) return null;
+		const sameId = theirs.tune_id === mine.tune_id;
+		const sameName = theirs.aliases.some((a) => mine.aliases.some((b) => nameKey(a) !== "" && nameKey(a) === nameKey(b)));
+		if (!sameId && !sameName) return null;
+		return { before, candidate: before.selected >= 0 ? theirs : mine, sure: sameId };
+	}
+
+	/** A row's pick or, when it has none, its best guess. */
+	private tuneOf(row: Row): Candidate | undefined {
+		if (row.state.kind !== "done") return undefined;
+		const { result } = row.state;
+		if (row.selected >= 0) return result.candidates[row.selected];
+		return matchesNothing(result.candidates) ? undefined : result.candidates[0];
+	}
+
+	/** Offer to join each section that is the same tune as the one before. */
+	private refreshJoins(): void {
+		for (const row of this.rows) {
+			const same = this.sameTuneBefore(row);
+			row.joinEl.empty();
+			if (!same) {
+				row.join = null;
+				continue;
+			}
+			// Ticked to begin with only when both sections have a pick and it is the very same tune.
+			if (row.join === null) row.join = same.sure && row.selected >= 0 && same.before.selected >= 0;
+			const label = row.joinEl.createEl("label", { cls: "tf-option" });
+			const box = label.createEl("input", { type: "checkbox" });
+			box.checked = row.join;
+			box.onchange = () => {
+				row.join = box.checked;
+				this.updateButtons();
+			};
+			label.appendText(`${same.sure ? "Same tune as" : "May be the same tune as"} the section before (${this.titleFor(same.candidate).title}). Join the two sections`);
+		}
+	}
+
+	/** Sections to join to the one before, by anchor key. */
+	private joins(): Map<string, number[]> {
+		const out = new Map<string, number[]>();
+		for (const row of this.rows) {
+			if (!row.join) continue;
+			const key = row.job.segment.anchorKey;
+			out.set(key, [...(out.get(key) ?? []), row.job.segment.section]);
+		}
+		return out;
+	}
+
 	private choices(): Choice[] {
 		const out: Choice[] = [];
-		for (const row of this.rows) {
-			if (row.state.kind !== "done" || row.selected < 0) continue;
-			const candidate = row.state.result.candidates[row.selected];
-			if (!candidate) continue;
+		this.rows.forEach((row, i) => {
+			if (row.join) return;
+			// A section others are joined to takes the first pick among them, if it has none itself.
+			let picked: Row | undefined = row;
+			for (let j = i + 1; picked.selected < 0 && this.rows[j]?.join; j++) {
+				if (this.rows[j].selected >= 0) picked = this.rows[j];
+			}
+			if (picked.state.kind !== "done" || picked.selected < 0) return;
+			const candidate = picked.state.result.candidates[picked.selected];
+			if (!candidate) return;
 			const { title, note } = this.titleFor(candidate);
 			out.push({ segment: row.job.segment, candidate, title, note });
-		}
+		});
 		return out;
 	}
 
 	private updateButtons(): void {
 		if (!this.copyButton) return;
+		this.refreshJoins();
 		const finished = this.rows.every((r) => r.state.kind === "done" || r.state.kind === "error");
-		const any = this.choices().length > 0 || this.detected.size > 0;
+		const any = this.choices().length > 0 || this.detected.size > 0 || this.joins().size > 0;
 		if (this.insertButton) this.insertButton.disabled = !finished || !any;
 		this.copyButton.disabled = !finished || !any;
 	}
@@ -390,7 +515,7 @@ export class IdentifyModal extends Modal {
 		if (!this.opts.onInsert || !this.insertButton) return;
 		this.insertButton.disabled = true;
 		try {
-			const message = await this.opts.onInsert(this.choices(), this.detected);
+			const message = await this.opts.onInsert(this.choices(), this.detected, this.joins());
 			new Notice(message);
 			this.close();
 		} catch (e) {
@@ -401,12 +526,48 @@ export class IdentifyModal extends Modal {
 
 	// ------------------------------------------------------------ listening
 
+	/**
+	 * Play a candidate's setting from thesession.org, at the pitch the
+	 * recording seems to be in, to compare with the section by ear.
+	 */
+	private async toggleTune(button: HTMLElement, c: Candidate, detune: number): Promise<void> {
+		const again = this.melodyButton === button;
+		this.stopAudio();
+		this.stopTune();
+		if (again) return;
+		this.melodyButton = button;
+		setIcon(button, "square");
+		button.setAttr("aria-label", "Stop");
+		let contour: string;
+		try {
+			contour = await this.plugin.engine.settingContour(c.setting_id);
+		} catch (e) {
+			new Notice(`Couldn't play the tune: ${(e as Error).message}`);
+			contour = "";
+		}
+		if (this.melodyButton !== button || this.cancelled) return;
+		if (!contour) new Notice("This setting has no notes in the tune index.");
+		this.melody.play(melodyNotes(contour, c.dance, -detune), () => this.stopTune());
+	}
+
+	/** Stop the candidate's tune, also when it is still loading. */
+	private stopTune(): void {
+		const button = this.melodyButton;
+		this.melodyButton = null;
+		this.melody.stop();
+		if (button) {
+			setIcon(button, "music");
+			button.setAttr("aria-label", "Play this tune");
+		}
+	}
+
 	private togglePlay(row: Row): void {
 		if (this.playing === row) {
 			this.stopAudio();
 			return;
 		}
 		this.stopAudio();
+		this.stopTune();
 		const seg = row.job.segment;
 		const audio = new Audio(this.app.vault.getResourcePath(row.job.file));
 		const stopAt = seg.end ?? seg.start + this.plugin.settings.analyseSeconds;

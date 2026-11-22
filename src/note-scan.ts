@@ -142,3 +142,22 @@ export function analysisWindow(segment: Segment, duration: number, maxSeconds: n
 	const end = maxSeconds > 0 ? Math.min(segEnd, start + maxSeconds) : segEnd;
 	return { start, end };
 }
+
+/** Another window is only worth trying when it starts at least this long after the first. */
+const RETRY_MIN_LATER_SECONDS = 10;
+
+/**
+ * Where to listen again when the start of a section matched nothing: its
+ * last `maxSeconds`, then its last half of that. The start can be a messy
+ * lead-in, or the tail of the tune before; a tune that only begins late in
+ * the section shows best in the shorter window. Windows that hardly differ
+ * from the first one are left out.
+ */
+export function retryWindows(segment: Segment, duration: number, maxSeconds: number): { start: number; end: number }[] {
+	if (maxSeconds <= 0) return [];
+	const first = analysisWindow(segment, duration, maxSeconds);
+	const segEnd = Math.min(segment.end ?? duration, duration);
+	return [maxSeconds, maxSeconds / 2]
+		.map((length) => ({ start: segEnd - length, end: segEnd }))
+		.filter((w) => w.start - first.start >= RETRY_MIN_LATER_SECONDS);
+}
