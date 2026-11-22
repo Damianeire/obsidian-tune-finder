@@ -101,7 +101,7 @@ They are slightly pessimistic: a few "wrong" answers were the right tune under a
 
 ## Limits
 
-- Recordings over 15 minutes (8 on a phone or tablet) are refused, because decoding holds the whole file in memory. Split session recordings into sets first.
+- Recordings over 20 minutes (8 on a phone or tablet) are refused, because decoding holds the whole file in memory. Split session recordings into sets first.
 - Not yet tried on a phone or tablet. Nothing in it is desktop-only, but the engine and index take about 100 MB of memory while in use (50 MB of it WebAssembly), and decoding a long recording more. The worker is stopped after five idle minutes.
 
 ## Building

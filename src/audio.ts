@@ -8,12 +8,12 @@ export const SAMPLE_RATE = 48000;
 
 /**
  * Decoding holds the whole file in memory (about 23 MB a minute for
- * stereo at 48 kHz), so very long recordings are refused: over 15 minutes
+ * stereo at 48 kHz), so very long recordings are refused: over 20 minutes
  * on a computer, over 8 on a phone or tablet. Split session recordings into
  * sets first, for example with trad-split.
  */
 export function maxDecodeSeconds(isMobile: boolean): number {
-	return (isMobile ? 8 : 15) * 60;
+	return (isMobile ? 8 : 20) * 60;
 }
 
 /** Duration in seconds from the file's metadata, without decoding it. */
